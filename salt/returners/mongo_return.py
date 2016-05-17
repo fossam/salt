@@ -137,31 +137,37 @@ def _get_conn(ret):
     password = _options.get('password')
     indexes = _options.get('indexes', False)
 
-    # at some point we should remove support for
-    # pymongo versions < 2.3 until then there are
-    # a bunch of these sections that need to be supported
-
-    if float(version) > 2.3:
-        conn = pymongo.MongoClient(host, port)
+    if __context__ and 'mongodb_returner_mdb' in __context__:
+        log.debug("Trying to reuse MongoDB connection pool")
+        conn = __context__['mongodb_returner_conn']
+        mdb = __context__['mongodb_returner_mdb']
     else:
-        conn = pymongo.Connection(host, port)
-    mdb = conn[db_]
+        # at some point we should remove support for
+        # pymongo versions < 2.3 until then there are
+        # a bunch of these sections that need to be supported
 
-    if user and password:
-        mdb.authenticate(user, password)
-
-    if indexes:
         if float(version) > 2.3:
-            mdb.saltReturns.create_index('minion')
-            mdb.saltReturns.create_index('jid')
-
-            mdb.jobs.create_index('jid')
+            conn = pymongo.MongoClient(host, port)
         else:
-            mdb.saltReturns.ensure_index('minion')
-            mdb.saltReturns.ensure_index('jid')
+            conn = pymongo.Connection(host, port)
+        mdb = conn[db_]
 
-            mdb.jobs.ensure_index('jid')
+        if user and password:
+            mdb.authenticate(user, password)
 
+        if indexes:
+            if float(version) > 2.3:
+                mdb.saltReturns.create_index('minion')
+                mdb.saltReturns.create_index('jid')
+                mdb.jobs.create_index('jid')
+            else:
+                mdb.saltReturns.ensure_index('minion')
+                mdb.saltReturns.ensure_index('jid')
+                mdb.jobs.ensure_index('jid')
+
+        log.debug("Creating mongodb connection and database objects")
+        __context__['mongodb_returner_conn'] = conn
+        __context__['mongodb_returner_mdb'] = mdb
     return conn, mdb
 
 
@@ -198,6 +204,24 @@ def returner(ret):
         mdb.saltReturns.insert_one(sdata.copy())
     else:
         mdb.saltReturns.insert(sdata.copy())
+
+
+def event_return(events):
+    '''
+    Return event to mongodb server
+
+    Requires that configuration be enabled via 'event_return'
+    option in master config.
+    '''
+    conn, mdb = _get_conn(events)
+    sdata = []
+    for event in events:
+        if isinstance(event, dict):
+            full_event = _remove_dots(event)
+        else:
+            full_event = event
+        sdata.append(full_event)
+    mdb.saltReturns.insert_many(sdata)
 
 
 def get_jid(jid):
